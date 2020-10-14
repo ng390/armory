@@ -703,9 +703,9 @@ def so2sat(
     )
 
 
-def so2sat_concat_map(x):
+def so2sat_concat_map(x, y):
     try:
-        (x1, x2), y = x
+        x1, x2 = x
     except (ValueError, TypeError):
         raise ValueError(
             "so2 dataset intermediate format corrupted. Should be in format (sentinel1,sentinel2),label"
