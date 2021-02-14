@@ -61,9 +61,9 @@ def poison_dataset(src_imgs, src_lbls, src, tgt, ds_size, attack, poisoned_indic
     poison_y = []
     for idx in range(ds_size):
         if src_lbls[idx] == src and idx in poisoned_indices:
-            src_img = src_imgs[idx]
+            src_img = np.transpose(src_imgs[idx], (2, 0, 1))
             p_img, p_label = attack.poison(src_img, [tgt])
-            poison_x.append(p_img)
+            poison_x.append(np.transpose(p_img, (1, 2, 0)))
             poison_y.append(p_label)
         else:
             poison_x.append(src_imgs[idx])
