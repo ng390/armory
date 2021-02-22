@@ -6,11 +6,54 @@ import pickle
 import time
 from PIL import Image
 from scipy.io import wavfile
+from collections import defaultdict
 
 from armory.data.datasets import ImageContext, VideoContext, AudioContext, So2SatContext
 
 
 logger = logging.getLogger(__name__)
+
+
+class LogitsExporter:
+    def __init__(self, base_output_dir):
+        self.base_output_dir = base_output_dir
+        self.saved_samples = defaultdict(int)
+        self._make_output_dir()
+
+    def _make_output_dir(self):
+        assert os.path.exists(self.base_output_dir) and os.path.isdir(
+            self.base_output_dir
+        ), f"Directory {self.base_output_dir} does not exist"
+        assert os.access(
+            self.base_output_dir, os.W_OK
+        ), f"Directory {self.base_output_dir} is not writable"
+        self.output_dir = os.path.join(self.base_output_dir, "saved_logits")
+        if os.path.exists(self.output_dir):
+            logger.warning(
+                f"Sample output directory {self.output_dir} already exists. Creating new directory"
+            )
+            self.output_dir = os.path.join(
+                self.base_output_dir, f"saved_logits_{time.time()}"
+            )
+        os.mkdir(self.output_dir)
+
+    def export(self, logits, true_labels, example_type):
+        for logit, y in zip(logits, true_labels):
+            np.save(
+                os.path.join(
+                    self.output_dir,
+                    f"{self.saved_samples[example_type]}_logits_{example_type}.npy",
+                ),
+                logit,
+            )
+            np.save(
+                os.path.join(
+                    self.output_dir,
+                    f"{self.saved_samples[example_type]}_true_label_{example_type}.npy",
+                ),
+                y,
+            )
+            self.saved_samples[example_type] += 1
 
 
 class SampleExporter:
@@ -43,9 +86,9 @@ class SampleExporter:
             self.y_dict[self.saved_samples] = {"ground truth": y, "predicted": y_adv}
             self.export_fn(x, x_adv)
 
-            if self.saved_samples == self.num_samples:
-                with open(os.path.join(self.output_dir, "predictions.pkl"), "wb") as f:
-                    pickle.dump(self.y_dict, f)
+        if self.saved_samples >= self.num_samples:
+            with open(os.path.join(self.output_dir, "predictions.pkl"), "wb") as f:
+                pickle.dump(self.y_dict, f)
 
     def _make_output_dir(self):
         assert os.path.exists(self.base_output_dir) and os.path.isdir(
@@ -117,102 +160,14 @@ class SampleExporter:
             assert np.all(
                 x_i.shape == x_adv_i.shape
             ), f"Benign and adversarial images are different shapes: {x_i.shape} vs. {x_adv_i.shape}"
-            if x_i[..., :4].min() < -1.0 or x_i[..., :4].max() > 1.0:
-                logger.warning(
-                    "Benign SAR images out of expected range. Clipping to [-1, 1]."
-                )
-            if x_adv_i[..., :4].min() < -1.0 or x_adv_i[..., :4].max() > 1.0:
-                logger.warning(
-                    "Adversarial SAR images out of expected range. Clipping to [-1, 1]."
-                )
-            if x_i[..., 4:].min() < 0.0 or x_i[..., 4:].max() > 1.0:
-                logger.warning(
-                    "Benign EO images out of expected range. Clipping to [0, 1]."
-                )
-            if x_adv_i[..., 4:].min() < 0.0 or x_adv_i[..., 4:].max() > 1.0:
-                logger.warning(
-                    "Adversarial EO images out of expected range. Clipping to [0, 1]."
-                )
 
-            folder = str(self.saved_samples)
-            os.mkdir(os.path.join(self.output_dir, folder))
-
-            sar_eps = 1e-9 + 1j * 1e-9
-            x_vh = np.log10(
-                np.abs(
-                    np.complex128(
-                        np.clip(x_i[..., 0], -1.0, 1.0)
-                        + 1j * np.clip(x_i[..., 1], -1.0, 1.0)
-                    )
-                    + sar_eps
-                )
+            np.save(
+                os.path.join(self.output_dir, f"{self.saved_samples}_benign.npy"), x
             )
-            x_vv = np.log10(
-                np.abs(
-                    np.complex128(
-                        np.clip(x_i[..., 2], -1.0, 1.0)
-                        + 1j * np.clip(x_i[..., 3], -1.0, 1.0)
-                    )
-                    + sar_eps
-                )
+            np.save(
+                os.path.join(self.output_dir, f"{self.saved_samples}_adversarial.npy"),
+                x_adv,
             )
-            x_adv_vh = np.log10(
-                np.abs(
-                    np.complex128(
-                        np.clip(x_adv_i[..., 0], -1.0, 1.0)
-                        + 1j * np.clip(x_adv_i[..., 1], -1.0, 1.0)
-                    )
-                    + sar_eps
-                )
-            )
-            x_adv_vv = np.log10(
-                np.abs(
-                    np.complex128(
-                        np.clip(x_adv_i[..., 2], -1.0, 1.0)
-                        + 1j * np.clip(x_adv_i[..., 3], -1.0, 1.0)
-                    )
-                    + sar_eps
-                )
-            )
-            sar_min = np.min((x_vh.min(), x_vv.min(), x_adv_vh.min(), x_adv_vv.min()))
-            sar_max = np.max((x_vh.max(), x_vv.max(), x_adv_vh.max(), x_adv_vv.max()))
-            sar_scale = 255.0 / (sar_max - sar_min)
-
-            benign_vh = Image.fromarray(np.uint8(sar_scale * (x_vh - sar_min)), "L")
-            benign_vv = Image.fromarray(np.uint8(sar_scale * (x_vv - sar_min)), "L")
-            adversarial_vh = Image.fromarray(
-                np.uint8(sar_scale * (x_adv_vh - sar_min)), "L"
-            )
-            adversarial_vv = Image.fromarray(
-                np.uint8(sar_scale * (x_adv_vv - sar_min)), "L"
-            )
-            benign_vh.save(os.path.join(self.output_dir, folder, "vh_benign.png"))
-            benign_vv.save(os.path.join(self.output_dir, folder, "vv_benign.png"))
-            adversarial_vh.save(
-                os.path.join(self.output_dir, folder, "vh_adversarial.png")
-            )
-            adversarial_vv.save(
-                os.path.join(self.output_dir, folder, "vv_adversarial.png")
-            )
-
-            eo_min = np.min((x_i[..., 4:].min(), x_adv[..., 4:].min()))
-            eo_max = np.max((x_i[..., 4:].max(), x_adv[..., 4:].max()))
-            eo_scale = 255.0 / (eo_max - eo_min)
-            for c in range(4, 14):
-                benign_eo = Image.fromarray(
-                    np.uint8(eo_scale * (np.clip(x_i[..., c], 0.0, 1.0) - eo_min)), "L"
-                )
-                adversarial_eo = Image.fromarray(
-                    np.uint8(eo_scale * (np.clip(x_adv_i[..., c], 0.0, 1.0) - eo_min)),
-                    "L",
-                )
-                benign_eo.save(
-                    os.path.join(self.output_dir, folder, f"eo{c-4}_benign.png")
-                )
-                adversarial_eo.save(
-                    os.path.join(self.output_dir, folder, f"eo{c-4}_adversarial.png")
-                )
-
             self.saved_samples += 1
 
     def _export_audio(self, x, x_adv):

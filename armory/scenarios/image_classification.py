@@ -20,7 +20,7 @@ from armory.utils.config_loading import (
 )
 from armory.utils import metrics
 from armory.scenarios.base import Scenario
-from armory.utils.export import SampleExporter
+from armory.utils.export import SampleExporter, LogitsExporter
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +100,12 @@ class ImageClassificationTask(Scenario):
         )
 
         eval_split = config["dataset"].get("eval_split", "test")
+        export_logits = config["scenario"].get("export_logits")
+        if export_logits is not None:
+            logits_exporter = LogitsExporter(self.scenario_output_dir)
+        else:
+            logits_exporter = None
+
         if skip_benign:
             logger.info("Skipping benign classification...")
         else:
@@ -123,6 +129,8 @@ class ImageClassificationTask(Scenario):
                     computational_resource_dict=metrics_logger.computational_resource_dict,
                 ):
                     y_pred = estimator.predict(x)
+                    if logits_exporter is not None:
+                        logits_exporter.export(y_pred, y, "benign")
                 metrics_logger.update_task(y, y_pred)
             metrics_logger.log_task()
 
@@ -163,6 +171,7 @@ class ImageClassificationTask(Scenario):
                 label_targeter = load_label_targeter(attack_config["targeted_labels"])
 
         export_samples = config["scenario"].get("export_samples")
+
         if export_samples is not None and export_samples > 0:
             sample_exporter = SampleExporter(
                 self.scenario_output_dir, test_data.context, export_samples
@@ -198,6 +207,8 @@ class ImageClassificationTask(Scenario):
             # Ensure that input sample isn't overwritten by estimator
             x_adv.flags.writeable = False
             y_pred_adv = estimator.predict(x_adv)
+            if logits_exporter is not None:
+                logits_exporter.export(y_pred_adv, y, "adversarial")
             metrics_logger.update_task(y, y_pred_adv, adversarial=True)
             if targeted:
                 metrics_logger.update_task(
